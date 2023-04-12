@@ -22,7 +22,7 @@ Secret look like:
 
 ### Steps
 
-1. Download source code from https://gitlab.aws.dev/karpmar/sagemaker-genie-1p-project/-/tree/main
+1. Download source code from https://github.com/DKRaiAIML/custom_sagemaker_project_template
 2. Copy zip files to s3:
     a. DeployCodeCommitRepo.zip -> s3://<YOUR_BUCKET>/<YOUR_SUBFOLDER>/seedcode/DeployCodeCommitRepo.zip
     b. ExampleNotebooksRepo.zip -> s3://<YOUR_BUCKET>/<YOUR_SUBFOLDER>/seedcode/ExampleNotebooksRepo.zip
