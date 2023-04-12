@@ -1,0 +1,354 @@
+Description: Toolchain template which provides the resources needed to represent infrastructure as code.
+  This template specifically creates a CI/CD pipeline to deploy a given inference image and pretrained Model from Model Registry to a SageMaker Endpoint fronted by API Gateway for SageMaker-Salesforce integration.
+Parameters:
+  SageMakerProjectName:
+    Type: String
+    Description: Name of the project
+    MinLength: 1
+    MaxLength: 32
+    AllowedPattern: ^[a-zA-Z](-*[a-zA-Z0-9])*
+
+  SageMakerProjectId:
+    Type: String
+    Description: Service generated Id of the project.
+
+  SourceModelPackageGroupName:
+    Type: String
+    Description: Name of the ModelPackageGroup for which deployments should be triggered for
+
+  SecretManagerSecretName:
+    Type: String
+    Description: Name of the secret in secrete manager used to Authorization
+
+Resources:
+  MlOpsArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub sagemaker-project-${SageMakerProjectId} # 58 chars max/ 64 allowed
+
+  ApprovalEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: !Sub >-
+        sagemaker-${SageMakerProjectId}-model-deploy-approval-trigger
+      Description: >-
+        Rule to trigger code pipeline when SageMaker Model Group in the
+        registry is approved. The Model Group needs to have the prefix
+        salesforce
+      EventPattern:
+        source:
+          - aws.sagemaker
+        detail-type:
+          - SageMaker Model Package State Change
+        detail:
+          ModelPackageGroupName:
+            - !Ref SourceModelPackageGroupName
+          ModelApprovalStatus:
+            - Approved
+      Targets:
+      - 'Arn':
+          'Fn::Join':
+          - ':'
+          - - 'arn'
+            - 'Ref': 'AWS::Partition'
+            - 'codepipeline'
+            - 'Ref': 'AWS::Region'
+            - 'Ref': 'AWS::AccountId'
+            - 'Ref': 'ModelDeployPipeline'
+        'RoleArn':
+          'Fn::Join':
+          - ':'
+          - - 'arn'
+            - 'Ref': 'AWS::Partition'
+            - 'iam:'
+            - 'Ref': 'AWS::AccountId'
+            - 'role/service-role/AmazonSageMakerServiceCatalogProductsEventsRole'
+        'Id':
+          'Fn::Sub': 'sagemaker-${SageMakerProjectName}-trigger'
+
+  RegisterLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: !Sub |
+          import json
+          import json
+          import boto3
+          import re
+          metaBucket = '${MlOpsArtifactsBucket.Arn}'
+          metaBucket=metaBucket[13:]
+          def lambda_handler(event, context):
+              metaKey = f'''metadata/metadata.json'''
+              RE_S3PATH = re.compile('s3://([^/]+)/(.*)', re.IGNORECASE)
+              def split_s3_path(s3_path):
+                  s3_match = RE_S3PATH.match(s3_path)
+                  assert s3_match is not None, 'S3 path should be like: s3://bucket/object'
+                  bucket, key = s3_match.groups()
+                  return bucket, key 
+              flow_file_location = event["detail"]["requestParameters"]["customerMetadataProperties"]["flow_file_location"]
+
+              s3loc = split_s3_path(flow_file_location)    
+              s3 = boto3.resource('s3')
+              ###### Extract metadata from flow file ######
+              meta = s3.Object(s3loc[0], s3loc[1])
+              flow = meta.get()['Body'].read().decode('utf-8')
+              flow_json = json.loads(flow)
+              meta_data = {}
+              meta_data["query"] = flow_json["nodes"][0]["parameters"]["dataset_definition"]["queryString"]
+              meta_data["schema"] = flow_json["nodes"][1]["trained_parameters"]["schema"]
+              meta_data_json = json.loads(json.dumps(meta_data, indent = 4))
+              ###### Save Metadata ######
+              s3object = s3.Object(metaBucket, metaKey)
+              s3object.put(
+                  Body=(bytes(json.dumps(meta_data_json).encode('UTF-8')))
+              )
+              ###### Update Registry ######
+              sagemaker_client = boto3.client('sagemaker')
+              meta_location = f'''s3://{metaBucket}/{metaKey}'''
+              meta_url = f'''https://{metaBucket}.s3.amazonaws.com/{metaKey}'''
+
+              model_arn = event["detail"]["responseElements"]["modelPackageArn"]
+              describe_model_package_response = sagemaker_client.describe_model_package(
+                  ModelPackageName=model_arn
+              )
+              describe_model_package_response['CustomerMetadataProperties']['metadata_file_location'] = meta_location
+              describe_model_package_response['CustomerMetadataProperties']['metadata_file_URL'] = meta_url
+              describe_model_package_response['CustomerMetadataProperties']['secret_name'] = '${SecretManagerSecretName}'
+   
+              update_model_package_response = sagemaker_client.update_model_package(
+                  ModelPackageArn=model_arn,
+                  CustomerMetadataProperties=describe_model_package_response['CustomerMetadataProperties']
+              )    
+              return update_model_package_response
+      Handler: index.lambda_handler
+      Runtime: python3.8
+      Timeout: 10
+      Role: 
+        'Fn::Join':
+        - ':'
+        - - 'arn'
+          - 'Ref': 'AWS::Partition'
+          - 'iam:'
+          - 'Ref': 'AWS::AccountId'
+          - 'role/service-role/AmazonSageMakerServiceCatalogProductsLambdaRole'
+      Environment:
+        Variables:
+          SageMakerProjectId: !Ref SageMakerProjectId
+          SageMakerProjectName: !Ref SageMakerProjectName
+
+  RegisterEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: !Sub >-
+        sagemaker-${SageMakerProjectId}-model-register-trigger
+      Description: >-
+        Rule to trigger a Lambda function when SageMaker Model Group in the
+        registry is approved. The Model Group needs to have the prefix
+        salesforce
+      EventPattern:
+        source:
+          - aws.sagemaker
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventName:
+            - CreateModelPackage
+          requestParameters:
+            modelPackageGroupName:
+              - !Ref SourceModelPackageGroupName
+      Targets:
+        - Arn: !GetAtt RegisterLambdaFunction.Arn
+          Id: !Sub 'sagemaker-${SageMakerProjectName}-trigger'
+
+  PermissionForEventsToInvokeRegisterLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !GetAtt RegisterLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt RegisterEventRule.Arn
+
+  ModelDeployCodeCommitEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      # Max length allowed: 64
+      Name: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-code # max: 10+33+15+4=62 chars
+      Description: "Rule to trigger a deployment when CodeCommit is updated with a commit"
+      EventPattern:
+        source:
+          - "aws.codecommit"
+        detail-type:
+          - "CodeCommit Repository State Change"
+        resources:
+          - !GetAtt ModelDeployCodeCommitRepository.Arn
+        detail:
+          referenceType:
+            - "branch"
+          referenceName:
+            - "main"
+      State: "ENABLED"
+      Targets:
+        -
+          Arn:
+            !Join [ ':', [ 'arn', !Ref 'AWS::Partition', 'codepipeline', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Ref ModelDeployPipeline ] ]
+          RoleArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/service-role/AmazonSageMakerServiceCatalogProductsEventsRole'
+          Id: !Sub 'codecommit-${SageMakerProjectName}-trigger'
+
+  ModelDeployCodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      # Max allowed length: 100 chars
+      RepositoryName: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-modeldeploy # max: 10+33+15+11=69
+      RepositoryDescription: !Sub SageMaker Endpoint deployment infrastructure as code for the Project ${SageMakerProjectName}
+      Code:
+        S3:
+          Bucket: sm-project-api-gateway-serverless-example-0a441f265f5f
+          Key: api-gateway-serverless/seedcode/DeployCodeCommitRepo.zip
+        BranchName: main
+
+  SampleNotebooksRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      # Max allowed length: 100 chars
+      RepositoryName: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-example-nb # max: 10+33+15+11=69
+      RepositoryDescription: !Sub SageMaker Endpoint deployment infrastructure as code for the Project ${SageMakerProjectName}
+      Code:
+        S3:
+          Bucket: sm-project-api-gateway-serverless-example-0a441f265f5f
+          Key: api-gateway-serverless/seedcode/ExampleNotebooksRepo.zip
+        BranchName: main
+
+  ModelDeployBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      # Max length: 255 chars
+      Name: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-modeldeploy # max: 10+33+15+11=69
+      Description: Builds the Cfn template which defines the Endpoint with specified configuration
+      ServiceRole:
+        'Fn::Join':
+        - ':'
+        - - 'arn'
+          - 'Ref': 'AWS::Partition'
+          - 'iam:'
+          - 'Ref': 'AWS::AccountId'
+          - 'role/service-role/AmazonSageMakerServiceCatalogProductsCodeBuildRole'
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        EnvironmentVariables:
+         - Name: SOURCE_MODEL_PACKAGE_GROUP_NAME
+           Value: !Ref SourceModelPackageGroupName
+         - Name: SAGEMAKER_PROJECT_NAME
+           Value: !Ref SageMakerProjectName
+         - Name: SAGEMAKER_PROJECT_ID
+           Value: !Ref SageMakerProjectId
+         - Name: ARTIFACT_BUCKET
+           Value: !Ref MlOpsArtifactsBucket
+         - Name: MODEL_EXECUTION_ROLE_ARN
+           Value: 
+            'Fn::Join':
+            - ':'
+            - - 'arn'
+              - 'Ref': 'AWS::Partition'
+              - 'iam:'
+              - 'Ref': 'AWS::AccountId'
+              - 'role/service-role/AmazonSageMakerServiceCatalogProductsExecutionRole'
+         - Name: SAGEMAKER_PROJECT_ARN
+           Value: !Join [ ':', [ 'arn', !Ref 'AWS::Partition', 'sagemaker', !Ref 'AWS::Region', !Ref 'AWS::AccountId', !Sub 'project/${SageMakerProjectName}']]
+         - Name: AWS_REGION
+           Value: !Ref AWS::Region
+         - Name: SECRET_MANAGER_SECRET_NAME
+           Value: !Ref SecretManagerSecretName
+         # these values are used by the build system to output to the output artifacts.
+         # further down, we use these names in the Cfn deployment steps
+         - Name: EXPORT_TEMPLATE_NAME
+           Value: template-export.yml
+         - Name: EXPORT_TEMPLATE_PROD_CONFIG
+           Value: prod-config-export.json
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      TimeoutInMinutes: 30
+
+  ModelDeployPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: MlOpsArtifactsBucket
+    Properties:
+      # Max length: 100 chars
+      Name: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-modeldeploy # max: 10+33+15+11=69
+      'RoleArn':
+        'Fn::Join':
+        - ':'
+        - - 'arn'
+          - 'Ref': 'AWS::Partition'
+          - 'iam:'
+          - 'Ref': 'AWS::AccountId'
+          - 'role/service-role/AmazonSageMakerServiceCatalogProductsCodePipelineRole'
+      ArtifactStore:
+        Type: S3
+        Location:
+          !Ref MlOpsArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: ModelDeployInfraCode
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                # need to explicitly set this to false per https://docs.aws.amazon.com/codepipeline/latest/userguide/update-change-detection.html
+                PollForSourceChanges: false
+                RepositoryName: !GetAtt ModelDeployCodeCommitRepository.Name
+                BranchName: main
+              OutputArtifacts:
+                - Name: SourceArtifact
+
+        - Name: Build
+          Actions:
+            - Name: BuildDeploymentTemplates
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !Ref ModelDeployBuildProject
+              RunOrder: 1
+
+        - Name: Deploy
+          Actions:
+            - Name: DeployResourcesProd
+              InputArtifacts:
+                - Name: BuildArtifact
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              Configuration:
+                # ActionMode: CHANGE_SET_EXECUTE
+                ActionMode: REPLACE_ON_FAILURE
+                Capabilities: CAPABILITY_NAMED_IAM
+                'RoleArn':
+                  'Fn::Join':
+                  - ':'
+                  - - 'arn'
+                    - 'Ref': 'AWS::Partition'
+                    - 'iam:'
+                    - 'Ref': 'AWS::AccountId'
+                    - 'role/service-role/AmazonSageMakerServiceCatalogProductsCloudformationRole'
+                StackName: !Sub sagemaker-${SageMakerProjectName}-${SageMakerProjectId}-deploy-prod  #10+33+15+14=72 out of 128 max
+                TemplateConfiguration: BuildArtifact::prod-config-export.json
+                # The buildspec.yml in the application stack uses this file name,
+                TemplatePath: BuildArtifact::template-export.yml
+              RunOrder: 1
