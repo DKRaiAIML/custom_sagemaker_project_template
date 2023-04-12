@@ -1,0 +1,117 @@
+
+This file list additional policies that must be added to SageMaker Project crated roles for this template to work\
+
+AmazonSageMakerServiceCatalogProductsLambdaRole
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::sagemaker*",
+                "arn:aws:s3:::sagemaker*/**"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "arn:aws:secretsmanager:*:*:secret:sagemaker/*"
+        }
+    ]
+}
+
+AmazonSageMakerServiceCatalogProductsCloudformationRole
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "lambda:AddPermission",
+                "lambda:CreateFunction",
+                "lambda:DeleteFunction",
+                "lambda:GetFunction",
+                "lambda:GetFunctionConfiguration",
+                "lambda:InvokeFunction",
+                "lambda:RemovePermission",
+                "lambda:DeleteLayerVersion",
+                "lambda:UpdateFunctionConfiguration",
+                "lambda:UpdateFunctionCode",
+                "lambda:ListTags",
+                "lambda:TagResource",
+                "lambda:GetLayerVersion",
+                "lambda:DeleteLayerVersion",
+                "lambda:PublishLayerVersion"
+            ],
+            "Resource": [
+                "arn:aws:lambda:*:*:function:sagemaker-*",
+                "arn:aws:lambda:*:*:layer:sagemakerLambdaJWTAuthorizerLayer",
+                "arn:aws:lambda:*:*:layer:sagemakerLambdaJWTAuthorizerLayer:*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "apigateway:POST",
+                "apigateway:GET",
+                "apigateway:DELETE",
+                "apigateway:PUT",
+                "apigateway:PATCH"
+            ],
+            "Resource": [
+                "arn:aws:apigateway:*::/restapis",
+                "arn:aws:apigateway:*::/restapis/*"
+            ],
+            "Condition": {
+                "ForAllValues:StringEquals": {
+                    "aws:TagKeys": [
+                        "SalesForceApplicationName"
+                    ]
+                }
+            }
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::*SageMaker*",
+                "arn:aws:s3:::*Sagemaker*",
+                "arn:aws:s3:::*sagemaker*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": [
+                "arn:aws:iam::*:role/service-role/AmazonSageMakerServiceCatalogProductsLambdaRole",
+                "arn:aws:iam::*:role/service-role/AmazonSageMakerServiceCatalogProductsApiGatewayRole",
+                "arn:aws:iam::*:role/service-role/AmazonSageMakerServiceCatalogProductsExecutionRole"
+            ]
+        }
+    ]
+}
+
+
+AmazonSageMakerServiceCatalogProductsApiGatewayRole
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "sagemaker:InvokeEndpoint",
+            "Resource": [
+                "arn:aws:sagemaker:*:*:endpoint/sagemaker-*",
+                "arn:aws:sagemaker:*:*:endpoint/salesforce-*"
+            ]
+        }
+    ]
+}
