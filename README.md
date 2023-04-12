@@ -12,7 +12,7 @@ Secret look like:
 "expectedAudience":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
-4. Update roles created during SageMaker domain creation following: https://quip-amazon.com/cqoEAjz6u7zm/Permissions-required-to-add-to-SageMaker-Project-service-roles
+4. Update roles created during SageMaker domain creation following: permissions.txt
 5. Grant portfolio access to SageMaker execution role
     Service Catalog -> Portfolios -> <YOUR_PORTFOLIO> -> access -> grant access
     roles -> Select SageMaker execution role - AmazonSageMaker-ExecutionRole-<YOUR_ACCOUNT_NUMNBER> or any custom role for executing SageMaker
