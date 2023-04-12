@@ -1,4 +1,4 @@
-# sagemaker-genie-1p-project
+# Custom Template For Creating Inference Endpoint backed by API Gateway an JWT Lambda authorizer
 
 ### Prerequisites
 
