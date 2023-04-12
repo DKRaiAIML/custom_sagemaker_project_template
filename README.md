@@ -1,4 +1,4 @@
-# Custom Template For Creating Inference Endpoint backed by API Gateway an JWT Lambda authorizer
+# Custom Template For Creating Inference Endpoint backed by API Gateway and JWT Lambda authorizer
 
 ### Prerequisites
 
