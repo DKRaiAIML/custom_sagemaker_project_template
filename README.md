@@ -8,8 +8,8 @@
 Secret look like:
 ```
 {
-"issuerUrl":"https://geniebyom.my.salesforce.com",
-"expectedAudience":"3MVG9y7s1kgRAI8b6hp7If35rbx3NpeGACZyziB9Ju7OVE81dZIGj7DPRWcG6kA0O0qWPmWZ8uzm4ESVE.1Ay"
+"issuerUrl":"https://myorg.com",
+"expectedAudience":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 ```
 4. Update roles created during SageMaker domain creation following: https://quip-amazon.com/cqoEAjz6u7zm/Permissions-required-to-add-to-SageMaker-Project-service-roles
